@@ -5,15 +5,35 @@ import type { EntryContext } from 'react-router';
 import { isbot } from 'isbot';
 import { PassThrough } from 'node:stream';
 import { initializeCronJobs } from './lib/cron-scheduler.server';
-import { warmupCache } from './lib/cache-manager.server';
-import { fetchAffiliateData } from './lib/affiliate-api.server';
+import { warmupCache, getCached, setCache } from './lib/cache-manager.server';
+import { fetchAffiliateData } from './lib/partnerads-api.server';
+import { fetchAdtractionData } from './lib/adtraction-api.server';
+import { mergeAffiliateData } from './lib/affiliate-merger.server';
 
 // Initialize cron jobs when server starts
 console.log('[Entry Server] Server starting...');
 
-// Warm up cache on startup (don't wait for it)
-warmupCache('affiliate-data', fetchAffiliateData)
-  .then(() => console.log('[Entry Server] Cache warmup complete'))
+// Warm up caches on startup (don't wait for them)
+Promise.all([
+  warmupCache('partnerads-data', fetchAffiliateData),
+  warmupCache('adtraction-data', fetchAdtractionData),
+])
+  .then(async ([partneradsData, adtractionData]) => {
+    console.log('[Entry Server] Source caches warmed up successfully');
+
+    // Also warm up merged cache if not present
+    const mergedCache = await getCached('merged-data');
+    if (!mergedCache && partneradsData && adtractionData) {
+      console.log('[Entry Server] Creating merged cache during warmup...');
+      const merged = mergeAffiliateData(partneradsData, adtractionData);
+      await setCache('merged-data', merged);
+      console.log('[Entry Server] Merged cache created successfully');
+    } else if (mergedCache) {
+      console.log('[Entry Server] Merged cache already exists');
+    }
+
+    console.log('[Entry Server] All caches warmed up successfully');
+  })
   .catch((error) => console.error('[Entry Server] Cache warmup failed:', error));
 
 // Initialize cron scheduler
@@ -143,7 +163,9 @@ function createReadableStreamFromReadable(readable: NodeJS.ReadableStream) {
       });
     },
     cancel() {
-      readable.destroy();
+      if ('destroy' in readable && typeof readable.destroy === 'function') {
+        readable.destroy();
+      }
     },
   });
 }

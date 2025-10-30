@@ -127,7 +127,7 @@ app/
 ├── routes/              # Application routes
 │   └── _index.tsx      # Home page
 ├── lib/                # Core business logic
-│   ├── affiliate-api.server.ts    # API integration
+│   ├── partnerads-api.server.ts   # Partner-ads API integration
 │   ├── cache-manager.server.ts    # Caching layer
 │   ├── cron-scheduler.server.ts   # Scheduled tasks
 │   └── types.ts                   # TypeScript types

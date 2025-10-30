@@ -1,10 +1,12 @@
-import cron from 'node-cron';
-import { forceRefreshCache } from './cache-manager.server';
-import { fetchAffiliateData } from './affiliate-api.server';
+import cron, { type ScheduledTask } from 'node-cron';
+import { forceRefreshCache, setCache } from './cache-manager.server';
+import { fetchAffiliateData } from './partnerads-api.server';
+import { fetchAdtractionData } from './adtraction-api.server';
+import { mergeAffiliateData } from './affiliate-merger.server';
 
 let isInitialized = false;
-let cronTask: cron.ScheduledTask | null = null;
-let retryTask: cron.ScheduledTask | null = null;
+let cronTask: ScheduledTask | null = null;
+let retryTask: ScheduledTask | null = null;
 
 /**
  * Schedule a retry in 3 hours
@@ -28,8 +30,17 @@ function scheduleRetryIn3Hours() {
     console.log('[Cron Scheduler] Running retry refresh...');
 
     try {
-      await forceRefreshCache('affiliate-data', fetchAffiliateData);
-      console.log('[Cron Scheduler] ✅ Retry refresh successful');
+      // Refresh both sources
+      const [partneradsData, adtractionData] = await Promise.all([
+        forceRefreshCache('partnerads-data', fetchAffiliateData),
+        forceRefreshCache('adtraction-data', fetchAdtractionData),
+      ]);
+      console.log('[Cron Scheduler] ✅ Retry refresh successful for both sources');
+
+      // Merge and cache the combined data
+      const mergedData = mergeAffiliateData(partneradsData, adtractionData);
+      await setCache('merged-data', mergedData);
+      console.log('[Cron Scheduler] ✅ Merged data cached');
 
       // Stop and clear the retry task since it succeeded
       if (retryTask) {
@@ -73,8 +84,17 @@ export function initializeCronJobs() {
     console.log('[Cron Scheduler] Running scheduled affiliate data refresh...');
 
     try {
-      await forceRefreshCache('affiliate-data', fetchAffiliateData);
-      console.log('[Cron Scheduler] ✅ Affiliate data refreshed successfully');
+      // Refresh both sources in parallel
+      const [partneradsData, adtractionData] = await Promise.all([
+        forceRefreshCache('partnerads-data', fetchAffiliateData),
+        forceRefreshCache('adtraction-data', fetchAdtractionData),
+      ]);
+      console.log('[Cron Scheduler] ✅ Both Partner-ads and Adtraction data refreshed successfully');
+
+      // Merge and cache the combined data
+      const mergedData = mergeAffiliateData(partneradsData, adtractionData);
+      await setCache('merged-data', mergedData);
+      console.log('[Cron Scheduler] ✅ Merged data cached');
 
       // Clear any pending retry task since main refresh succeeded
       if (retryTask) {
@@ -115,8 +135,17 @@ export function stopCronJobs() {
 export async function triggerManualRefresh() {
   console.log('[Cron Scheduler] Manual refresh triggered...');
   try {
-    await forceRefreshCache('affiliate-data', fetchAffiliateData);
-    console.log('[Cron Scheduler] ✅ Manual refresh completed');
+    // Refresh both sources in parallel
+    const [partneradsData, adtractionData] = await Promise.all([
+      forceRefreshCache('partnerads-data', fetchAffiliateData),
+      forceRefreshCache('adtraction-data', fetchAdtractionData),
+    ]);
+    console.log('[Cron Scheduler] ✅ Manual refresh completed for both sources');
+
+    // Merge and cache the combined data
+    const mergedData = mergeAffiliateData(partneradsData, adtractionData);
+    await setCache('merged-data', mergedData);
+    console.log('[Cron Scheduler] ✅ Merged data cached');
   } catch (error) {
     console.error('[Cron Scheduler] ❌ Manual refresh failed:', error);
     throw error;
