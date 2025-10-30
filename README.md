@@ -143,10 +143,6 @@ app/
 4. **Fallback**: If the API fails, the app serves cached data with a warning
 5. **Display**: Merchants are organized by category and displayed with affiliate links
 
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
 ## License
 
 This project is private and not open for public use without permission.

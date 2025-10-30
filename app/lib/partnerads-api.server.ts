@@ -28,11 +28,11 @@ const parser = new XMLParser({
 /**
  * Fetch and parse affiliate data from Partner-ads.com API with retry logic
  */
-export async function fetchAffiliateData(): Promise<AffiliateData> {
+export async function fetchPartnerAdsData(): Promise<AffiliateData> {
   // Use HTTPS for security
   const url = `https://www.partner-ads.com/dk/programoversigt_xml.php?key=${API_KEY}&godkendte=1`;
 
-  console.log('[Affiliate API] Fetching data from Partner-ads.com...');
+  console.log('[Partner-ads API] Fetching data from Partner-ads.com...');
 
   // Use shared retry logic
   return fetchWithRetry(
@@ -65,20 +65,23 @@ export async function fetchAffiliateData(): Promise<AffiliateData> {
         ? merchants
         : [merchants];
 
-      console.log(`[Affiliate API] Found ${merchantArray.length} total merchants`);
+      console.log(`[Partner-ads API] Found ${merchantArray.length} total merchants`);
 
       // Group by category
       const categoriesMap = new Map<number, Category>();
       const merchantsByCategory = new Map<number, Merchant[]>();
 
-      let approvedCount = 0;
+      let processedCount = 0;
+      let skippedCount = 0;
+      let validationFailures = 0;
 
       for (const rawMerchant of merchantArray) {
         // Validate merchant data with Zod schema
         const validation = PartnerAdsXMLMerchantSchema.safeParse(rawMerchant);
 
         if (!validation.success) {
-          console.warn('[Affiliate API] Invalid merchant data:', validation.error.errors);
+          console.warn('[Partner-ads API] Invalid merchant data:', validation.error.errors);
+          validationFailures++;
           continue; // Skip invalid merchants
         }
 
@@ -86,7 +89,13 @@ export async function fetchAffiliateData(): Promise<AffiliateData> {
 
         // Filter: only approved merchants with valid program ID
         if (merchant.programid !== 'N/A' && merchant.status === 'approved') {
-          approvedCount++;
+          // Validate required fields exist and are non-empty
+          if (!merchant.programurl || !merchant.affiliatelink) {
+            skippedCount++;
+            continue; // Skip merchants without required URL fields
+          }
+
+          processedCount++;
 
           // Generate deterministic category ID from category name
           // This ensures consistent IDs across Partner-ads and Adtraction
@@ -118,10 +127,21 @@ export async function fetchAffiliateData(): Promise<AffiliateData> {
             merchantsByCategory.set(categoryId, []);
           }
           merchantsByCategory.get(categoryId)!.push(merchantObj);
+        } else {
+          // Track merchants that don't meet approval criteria
+          skippedCount++;
         }
       }
 
-      console.log(`[Affiliate API] Filtered to ${approvedCount} approved merchants`);
+      console.log(`[Partner-ads API] Processed ${processedCount} approved merchants`);
+      if (validationFailures > 0) {
+        console.log(`[Partner-ads API] Failed validation: ${validationFailures} merchants`);
+      }
+      if (skippedCount > 0) {
+        console.log(
+          `[Partner-ads API] Skipped ${skippedCount} merchants with missing URL fields`
+        );
+      }
 
       // Build final categories array
       const categories: Category[] = Array.from(categoriesMap.values())
@@ -131,7 +151,7 @@ export async function fetchAffiliateData(): Promise<AffiliateData> {
         }))
         .sort((a, b) => a.id - b.id); // Sort by category ID
 
-      console.log(`[Affiliate API] Organized into ${categories.length} categories`);
+      console.log(`[Partner-ads API] Organized into ${categories.length} categories`);
 
       // Success!
       return {
@@ -141,6 +161,6 @@ export async function fetchAffiliateData(): Promise<AffiliateData> {
     },
     MAX_RETRIES,
     RETRY_DELAY,
-    '[Affiliate API]'
+    '[Partner-ads API]'
   );
 }

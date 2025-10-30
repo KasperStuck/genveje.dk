@@ -6,7 +6,7 @@ import { isbot } from 'isbot';
 import { PassThrough } from 'node:stream';
 import { initializeCronJobs } from './lib/cron-scheduler.server';
 import { warmupCache, getCached, setCache } from './lib/cache-manager.server';
-import { fetchAffiliateData } from './lib/partnerads-api.server';
+import { fetchPartnerAdsData } from './lib/partnerads-api.server';
 import { fetchAdtractionData } from './lib/adtraction-api.server';
 import { mergeAffiliateData } from './lib/affiliate-merger.server';
 
@@ -15,7 +15,7 @@ console.log('[Entry Server] Server starting...');
 
 // Warm up caches on startup (don't wait for them)
 Promise.all([
-  warmupCache('partnerads-data', fetchAffiliateData),
+  warmupCache('partnerads-data', fetchPartnerAdsData),
   warmupCache('adtraction-data', fetchAdtractionData),
 ])
   .then(async ([partneradsData, adtractionData]) => {

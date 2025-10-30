@@ -1,6 +1,6 @@
 import { useState, useMemo, useCallback } from "react";
 import type { Route } from "./+types/_index";
-import { fetchAffiliateData } from "~/lib/partnerads-api.server";
+import { fetchPartnerAdsData } from "~/lib/partnerads-api.server";
 import { fetchAdtractionData } from "~/lib/adtraction-api.server";
 import { mergeAffiliateData } from "~/lib/affiliate-merger.server";
 import { getCachedOrFetch, getCached } from "~/lib/cache-manager.server";
@@ -37,7 +37,7 @@ export async function loader({}: Route.LoaderArgs) {
     try {
       partneradsData = await getCachedOrFetch<AffiliateData>(
         'partnerads-data',
-        fetchAffiliateData
+        fetchPartnerAdsData
       );
     } catch (error) {
       partneradsError = error instanceof Error ? error : new Error('Partner-ads fetch failed');

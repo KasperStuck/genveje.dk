@@ -72,7 +72,7 @@ app/
 1. **Initial Load (Optimized)**: Route loader uses three-tier caching:
    - **Tier 1**: Checks `'merged-data'` cache (fastest path, no merge needed)
    - **Tier 2**: If no merged cache, fetches individual sources:
-     - Calls `getCachedOrFetch('partnerads-data', fetchAffiliateData)` for Partner-ads
+     - Calls `getCachedOrFetch('partnerads-data', fetchPartnerAdsData)` for Partner-ads
      - Calls `getCachedOrFetch('adtraction-data', fetchAdtractionData)` for Adtraction
    - **Tier 3**: If fresh fetch fails, uses stale cache as fallback
    - Merges data only when merged cache is unavailable
