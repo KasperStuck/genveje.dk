@@ -22,7 +22,7 @@ Genveje.dk (meaning "shortcuts" in Danish) helps users quickly find and access D
 - **Language**: TypeScript
 - **Styling**: Tailwind CSS 4
 - **UI**: Radix UI + Lucide Icons
-- **Caching**: cache-manager
+- **Caching**: Keyv with SQLite (@keyv/sqlite)
 - **Scheduling**: node-cron
 - **API**: Partner-ads.com XML feed
 - **Build**: Vite 7

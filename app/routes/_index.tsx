@@ -1,9 +1,5 @@
 import { useState, useMemo, useCallback } from "react";
 import type { Route } from "./+types/_index";
-import { fetchPartnerAdsData } from "~/lib/partnerads-api.server";
-import { fetchAdtractionData } from "~/lib/adtraction-api.server";
-import { mergeAffiliateData } from "~/lib/affiliate-merger.server";
-import { getCachedOrFetch, getCached } from "~/lib/cache-manager.server";
 import type { AffiliateData } from "~/lib/types";
 import { SearchBar } from "~/components/SearchBar";
 import { CategoryCard } from "~/components/CategoryCard";
@@ -12,67 +8,49 @@ import { SourceIndicator } from "~/components/SourceIndicator";
 import { Alert, AlertDescription } from "~/components/ui/alert";
 
 export async function loader({}: Route.LoaderArgs) {
-  console.log('[Loader] home route');
+  // Import server-only modules inside the loader to avoid bundling issues
+  const { fetchPartnerAdsData } = await import("~/lib/partnerads-api.server");
+  const { fetchAdtractionData } = await import("~/lib/adtraction-api.server");
+  const { mergeAffiliateData } = await import("~/lib/affiliate-merger.server");
+  const { getCachedIgnoreVersion, getCachedOrFetchStale, CACHE_KEYS } = await import("~/lib/cache-manager.server");
+
+  /**
+   * Helper to fetch a single source with stale fallback
+   */
+  async function fetchSourceWithFallback(
+    key: string,
+    fetchFn: () => Promise<AffiliateData>,
+    sourceName: string
+  ): Promise<{ data: AffiliateData | null; error: Error | null }> {
+    try {
+      // Use stale-while-revalidate pattern for better performance
+      const data = await getCachedOrFetchStale<AffiliateData>(key, fetchFn);
+      return { data, error: null };
+    } catch (error) {
+      const err = error instanceof Error ? error : new Error(`${sourceName} fetch failed`);
+      console.error(`[Loader] ${sourceName} error:`, err.message, err.stack);
+
+      // Try stale cache as last resort
+      const staleData = await getCachedIgnoreVersion<AffiliateData>(key);
+      if (staleData) {
+        console.log(`[Loader] Using stale ${sourceName} cache as fallback`);
+        return { data: staleData, error: null };
+      }
+
+      return { data: null, error: err };
+    }
+  }
 
   try {
-    // First, try to get pre-merged cached data (from cron job)
-    const cachedMergedData = await getCached<AffiliateData>('merged-data');
+    // Fetch both sources in parallel with fallback handling
+    // Note: getCachedOrFetchStale already has request deduplication built-in
+    const [partneradsResult, adtractionResult] = await Promise.all([
+      fetchSourceWithFallback(CACHE_KEYS.PARTNERADS, fetchPartnerAdsData, 'Partner-ads'),
+      fetchSourceWithFallback(CACHE_KEYS.ADTRACTION, fetchAdtractionData, 'Adtraction'),
+    ]);
 
-    if (cachedMergedData) {
-      console.log('[Loader] Using pre-merged cached data');
-      return {
-        data: cachedMergedData,
-        source: 'both-apis',
-        error: null,
-      };
-    }
-
-    // If no merged cache, fetch from individual sources and merge
-    console.log('[Loader] No merged cache, fetching from sources...');
-
-    // Fetch Partner-ads data (cached separately)
-    let partneradsData: AffiliateData | null = null;
-    let partneradsError: Error | null = null;
-
-    try {
-      partneradsData = await getCachedOrFetch<AffiliateData>(
-        'partnerads-data',
-        fetchPartnerAdsData
-      );
-    } catch (error) {
-      partneradsError = error instanceof Error ? error : new Error('Partner-ads fetch failed');
-      console.error('[Loader] Partner-ads error:', partneradsError.message);
-
-      // Try to get stale cached data as fallback
-      const cached = await getCached<AffiliateData>('partnerads-data');
-      if (cached) {
-        console.log('[Loader] Using stale Partner-ads cache');
-        partneradsData = cached;
-        partneradsError = null;
-      }
-    }
-
-    // Fetch Adtraction data (cached separately)
-    let adtractionData: AffiliateData | null = null;
-    let adtractionError: Error | null = null;
-
-    try {
-      adtractionData = await getCachedOrFetch<AffiliateData>(
-        'adtraction-data',
-        fetchAdtractionData
-      );
-    } catch (error) {
-      adtractionError = error instanceof Error ? error : new Error('Adtraction fetch failed');
-      console.error('[Loader] Adtraction error:', adtractionError.message);
-
-      // Try to get stale cached data as fallback
-      const cached = await getCached<AffiliateData>('adtraction-data');
-      if (cached) {
-        console.log('[Loader] Using stale Adtraction cache');
-        adtractionData = cached;
-        adtractionError = null;
-      }
-    }
+    const { data: partneradsData, error: partneradsError } = partneradsResult;
+    const { data: adtractionData, error: adtractionError } = adtractionResult;
 
     // If both sources failed, throw error
     if (!partneradsData && !adtractionData) {
@@ -82,7 +60,7 @@ export async function loader({}: Route.LoaderArgs) {
       });
     }
 
-    // Merge the data
+    // Merge the data on demand
     const mergedData = mergeAffiliateData(partneradsData, adtractionData);
 
     // Determine source indicator
@@ -111,11 +89,14 @@ export async function loader({}: Route.LoaderArgs) {
       error: errorMessage,
     };
   } catch (error) {
-    console.error('[Loader] Critical error:', error);
+    console.error('[Loader] Critical error:', {
+      message: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    });
 
-    // Last resort: try any cached data
-    const partneradsCache = await getCached<AffiliateData>('partnerads-data');
-    const adtractionCache = await getCached<AffiliateData>('adtraction-data');
+    // Last resort: try any cached data (even stale/mismatched version)
+    const partneradsCache = await getCachedIgnoreVersion<AffiliateData>('partnerads-data');
+    const adtractionCache = await getCachedIgnoreVersion<AffiliateData>('adtraction-data');
 
     if (partneradsCache || adtractionCache) {
       console.log('[Loader] Returning any available cached data as last resort');

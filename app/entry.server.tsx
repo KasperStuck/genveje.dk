@@ -5,36 +5,58 @@ import type { EntryContext } from 'react-router';
 import { isbot } from 'isbot';
 import { PassThrough } from 'node:stream';
 import { initializeCronJobs } from './lib/cron-scheduler.server';
-import { warmupCache, getCached, setCache } from './lib/cache-manager.server';
+import { warmupCache, CACHE_KEYS } from './lib/cache-manager.server';
 import { fetchPartnerAdsData } from './lib/partnerads-api.server';
 import { fetchAdtractionData } from './lib/adtraction-api.server';
-import { mergeAffiliateData } from './lib/affiliate-merger.server';
 
 // Initialize cron jobs when server starts
 console.log('[Entry Server] Server starting...');
 
-// Warm up caches on startup (don't wait for them)
-Promise.all([
-  warmupCache('partnerads-data', fetchPartnerAdsData),
-  warmupCache('adtraction-data', fetchAdtractionData),
-])
-  .then(async ([partneradsData, adtractionData]) => {
-    console.log('[Entry Server] Source caches warmed up successfully');
+// Cache warmup with timeout: Warm up source caches on startup
+// Timeout prevents hanging during server startup
+const WARMUP_TIMEOUT_MS = 30_000; // 30 seconds max for warmup
 
-    // Also warm up merged cache if not present
-    const mergedCache = await getCached('merged-data');
-    if (!mergedCache && partneradsData && adtractionData) {
-      console.log('[Entry Server] Creating merged cache during warmup...');
-      const merged = mergeAffiliateData(partneradsData, adtractionData);
-      await setCache('merged-data', merged);
-      console.log('[Entry Server] Merged cache created successfully');
-    } else if (mergedCache) {
-      console.log('[Entry Server] Merged cache already exists');
+(async () => {
+  const startTime = Date.now();
+
+  // Create timeout promise
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    setTimeout(() => reject(new Error('Cache warmup timeout')), WARMUP_TIMEOUT_MS);
+  });
+
+  try {
+    // Race warmup against timeout
+    await Promise.race([
+      (async () => {
+        console.log('[Entry Server] Warming source caches...');
+
+        // Warm up individual sources in parallel
+        // Note: warmupCache already has request deduplication via forceRefreshCache
+        const results = await Promise.allSettled([
+          warmupCache(CACHE_KEYS.PARTNERADS, fetchPartnerAdsData),
+          warmupCache(CACHE_KEYS.ADTRACTION, fetchAdtractionData),
+        ]);
+
+        if (results[0].status === 'rejected') {
+          console.error('[Entry Server] Partner-ads warmup failed:', results[0].reason);
+        }
+        if (results[1].status === 'rejected') {
+          console.error('[Entry Server] Adtraction warmup failed:', results[1].reason);
+        }
+
+        const successCount = results.filter(r => r.status === 'fulfilled').length;
+        console.log(`[Entry Server] Cache warmup completed in ${Date.now() - startTime}ms (${successCount}/2 sources)`);
+      })(),
+      timeoutPromise,
+    ]);
+  } catch (error) {
+    if (error instanceof Error && error.message === 'Cache warmup timeout') {
+      console.error(`[Entry Server] Cache warmup timed out after ${WARMUP_TIMEOUT_MS}ms - server will continue with lazy loading`);
+    } else {
+      console.error('[Entry Server] Unexpected cache warmup error:', error);
     }
-
-    console.log('[Entry Server] All caches warmed up successfully');
-  })
-  .catch((error) => console.error('[Entry Server] Cache warmup failed:', error));
+  }
+})();
 
 // Initialize cron scheduler
 initializeCronJobs();

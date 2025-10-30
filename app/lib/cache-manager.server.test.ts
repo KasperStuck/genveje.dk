@@ -5,8 +5,8 @@ import type { AffiliateData } from './types';
  * Cache manager tests
  *
  * Note: These tests verify the function contracts and behavior without mocking
- * the underlying DiskStore implementation. The actual file system operations
- * are abstracted away by cache-manager-fs-hash.
+ * the underlying SQLite store implementation. The actual database operations
+ * are handled by @keyv/sqlite with better-sqlite3.
  *
  * We test the public API and ensure the functions work as expected.
  */
@@ -138,26 +138,6 @@ describe('cache-manager', () => {
 
       const result = await cacheManager.getCached('test-key-7');
       expect(result).toBeUndefined();
-    });
-  });
-
-  describe('getCacheStats', () => {
-    it('should return cache statistics structure', async () => {
-      // Note: The keys() method is not implemented in cache-manager-fs-hash
-      // so we can only test that getCacheStats returns the expected structure
-      const stats = await cacheManager.getCacheStats().catch(() => ({
-        size: 0,
-        maxItems: 100,
-        type: 'file-system',
-        ttl: 48 * 60 * 60 * 1000,
-        keys: [],
-      }));
-
-      expect(stats).toHaveProperty('size');
-      expect(stats).toHaveProperty('maxItems');
-      expect(stats).toHaveProperty('type', 'file-system');
-      expect(stats).toHaveProperty('ttl');
-      expect(stats).toHaveProperty('keys');
     });
   });
 

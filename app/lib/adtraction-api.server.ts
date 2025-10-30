@@ -51,14 +51,6 @@ export async function fetchAdtractionData(): Promise<AffiliateData> {
 
       const jsonData = await response.json();
 
-      // Debug: Log the actual response structure
-      console.log('[Adtraction API] Response type:', typeof jsonData);
-      console.log('[Adtraction API] Is array:', Array.isArray(jsonData));
-      if (jsonData && typeof jsonData === 'object') {
-        console.log('[Adtraction API] Response keys:', Object.keys(jsonData).slice(0, 10));
-        console.log('[Adtraction API] Response sample:', JSON.stringify(jsonData).substring(0, 500));
-      }
-
       // Handle different response formats
       let programs: AdtractionProgram[];
 
@@ -86,12 +78,6 @@ export async function fetchAdtractionData(): Promise<AffiliateData> {
       }
 
       console.log(`[Adtraction API] Found ${programs.length} total programs`);
-
-      // Debug: Log first program's structure to see available fields
-      if (programs.length > 0) {
-        console.log('[Adtraction API] Sample program fields:', Object.keys(programs[0]));
-        console.log('[Adtraction API] Sample program data:', JSON.stringify(programs[0], null, 2));
-      }
 
       // Group by category
       const categoriesMap = new Map<number, Category>();

@@ -20,12 +20,13 @@ Genveje.dk is a Danish web application that provides categorized shortcuts to Da
 2. **Runtime Type Validation**: Zod schemas validate all API responses before processing
 3. **Hash-Based Category IDs**: Deterministic category IDs generated from names ensure consistent merging across sources
 4. **Consistent URL Handling**: Both Partner-ads and Adtraction populate `programurl` field uniformly
-5. **Three-Tier Caching System**:
+5. **SQLite-Based Caching System**:
    - Individual source caches (`partnerads-data`, `adtraction-data`)
-   - Pre-merged cache (`merged-data`) for optimal performance
-   - File-based storage with cache-manager-fs-hash
-6. **Optimized Data Merging**: Pre-merged data cached by cron job, eliminating merge operations on most requests
-7. **Scheduled Updates**: Node-cron jobs refresh all caches daily (sources + merged data)
+   - SQLite database storage for reliability and performance
+   - ACID guarantees and superior concurrency handling
+   - O(log n) indexed lookups vs O(n) JSON parsing
+6. **On-Demand Data Merging**: Data merged on each request from cached sources (fast in-memory operation)
+7. **Scheduled Updates**: Node-cron jobs refresh source caches daily
 8. **Robust Error Handling**: Gracefully handles partial failures with multi-level fallback strategy
 9. **Performance Optimizations**:
    - Debounced search (300ms)
@@ -43,8 +44,8 @@ app/
 │   ├── partnerads-api.server.ts    # Partner-ads.com API integration (XML)
 │   ├── adtraction-api.server.ts    # Adtraction API integration (JSON)
 │   ├── affiliate-merger.server.ts  # Merges data from both sources
-│   ├── cache-manager.server.ts     # Three-tier cache management
-│   ├── cron-scheduler.server.ts    # Scheduled data refresh + merge caching
+│   ├── cache-manager.server.ts     # SQLite-based cache management
+│   ├── cron-scheduler.server.ts    # Scheduled data refresh
 │   ├── types.ts                    # TypeScript interfaces
 │   └── utils.ts                    # Utility functions
 ├── components/         # React components
@@ -62,28 +63,26 @@ app/
 │   ├── SourceIndicator.tsx # Data source badge
 │   └── LoadingState.tsx   # Skeleton loading state
 ├── app.css            # Global styles with theme support
-├── entry.server.tsx   # Server entry point with dual cache warmup
+├── entry.server.tsx   # Server entry point with source cache warmup
 ├── root.tsx           # Root layout
 └── routes.ts          # Route configuration
 ```
 
 ## Data Flow
 
-1. **Initial Load (Optimized)**: Route loader uses three-tier caching:
-   - **Tier 1**: Checks `'merged-data'` cache (fastest path, no merge needed)
-   - **Tier 2**: If no merged cache, fetches individual sources:
-     - Calls `getCachedOrFetch('partnerads-data', fetchPartnerAdsData)` for Partner-ads
-     - Calls `getCachedOrFetch('adtraction-data', fetchAdtractionData)` for Adtraction
-   - **Tier 3**: If fresh fetch fails, uses stale cache as fallback
-   - Merges data only when merged cache is unavailable
+1. **Initial Load**: Route loader uses two-tier SQLite caching:
+   - Fetches both sources in parallel from SQLite cache (or fresh if cache miss):
+     - Calls `getCachedOrFetchStale(CACHE_KEYS.PARTNERADS, fetchPartnerAdsData)` for Partner-ads
+     - Calls `getCachedOrFetchStale(CACHE_KEYS.ADTRACTION, fetchAdtractionData)` for Adtraction
+   - If fresh fetch fails, uses stale cache as fallback
+   - Merges data on-demand (fast in-memory operation)
    - Deduplicates merchants by URL during merge
 
-2. **Periodic Updates (Enhanced)**: Cron job (configured in `cron-scheduler.server.ts`):
+2. **Periodic Updates**: Cron job (configured in `cron-scheduler.server.ts`):
    - Runs daily at 3:00 AM
    - Refreshes `'partnerads-data'` and `'adtraction-data'` in parallel
-   - **NEW**: Merges and caches result to `'merged-data'`
-   - Eliminates merge operations for subsequent requests
-   - Implements retry logic (3-hour delay) if refresh fails
+   - Updates SQLite cache with fresh data
+   - Implements retry logic (max 5 consecutive retries with 3-hour delay)
 
 3. **Client-Side Performance**: React optimizations in `_index.tsx`:
    - `useMemo` for filtered data (only recalculates on search/data change)
@@ -95,17 +94,16 @@ app/
 4. **Error Recovery**: Multi-level fallback strategy:
    - If Partner-ads fails: Uses Adtraction data only
    - If Adtraction fails: Uses Partner-ads data only
-   - If both fresh fetches fail: Attempts to use stale cached data
-   - If merged cache exists: Uses that regardless of source failures
+   - If both fresh fetches fail: Attempts to use stale cached data from SQLite
    - Shows user-friendly warnings with shadcn Alert component
-   - Only throws error if no cache available from any tier
+   - Only throws error if no data available from any source
 
 ## Key Files
 
 ### app/routes/_index.tsx
 - **Optimized** main route with performance enhancements:
-  - Uses pre-merged cache for instant page loads (no merge operation)
-  - Falls back to individual source fetching + merging if needed
+  - Fetches individual sources from SQLite cache (with stale-while-revalidate)
+  - Merges data on-demand (fast in-memory operation)
   - `useMemo` for filtered data (only recalculates when search query or data changes)
   - `useMemo` for merchant totals (prevents unnecessary calculations)
   - `useCallback` for search handler (stable function reference)
@@ -149,29 +147,33 @@ app/
 - Returns merged `AffiliateData` with latest timestamp
 
 ### app/lib/cache-manager.server.ts
-- Implements file-based caching using cache-manager-fs-hash
+- Implements SQLite-based caching using @keyv/sqlite with better-sqlite3
 - Provides `getCachedOrFetch()` helper for automatic cache handling
+- Provides `getCachedOrFetchStale()` for stale-while-revalidate pattern
 - Provides `getCached()` for checking cache without fetching
 - Provides `setCache()` for manual cache updates
+- Provides `getCachedBatch()` and `setCacheBatch()` for parallel operations
 - Implements TTL (Time To Live) of 48 hours for cache entries
-- Stores cached data in `./cache` directory as JSON files
-- Uses hashed filenames for better filesystem performance
+- Stores cached data in `./cache/cache.sqlite` SQLite database
+- ACID guarantees and superior concurrency handling (WAL mode)
+- O(log n) indexed lookups vs O(n) JSON parsing
 - Cache survives server restarts
-- **3 cache keys**:
-  - `'partnerads-data'` - Partner-ads source data
-  - `'adtraction-data'` - Adtraction source data
-  - `'merged-data'` - Pre-merged data (NEW - performance optimization)
+- **Request deduplication** and **refresh locks** prevent concurrent duplicate operations
+- **Cache metrics** track hits, misses, refreshes, and fetch times
+- **2 cache keys** (using `CACHE_KEYS` constants):
+  - `CACHE_KEYS.PARTNERADS` - Partner-ads source data
+  - `CACHE_KEYS.ADTRACTION` - Adtraction source data
 
 ### app/lib/cron-scheduler.server.ts
-- Configures node-cron schedule for all cache tiers
+- Configures node-cron schedule for source cache refresh
 - Runs daily at 3:00 AM to refresh data:
   1. Fetches Partner-ads and Adtraction data in parallel
-  2. Merges the results
-  3. Caches merged data to `'merged-data'` key (NEW)
-- Implements retry logic (3-hour delay) if refresh fails
+  2. Updates SQLite cache with fresh data
+- Implements retry logic with max 5 consecutive retries (3-hour delay between retries)
 - Can be disabled in development via ENABLE_CRON env var
 - Always enabled in production
 - `triggerManualRefresh()` function for testing/manual cache refresh
+- `getRefreshStatus()` returns refresh status including failure count
 
 ### app/lib/types.ts
 - **TypeScript interfaces** with comprehensive JSDoc documentation:
@@ -240,16 +242,18 @@ ENABLE_CRON=false                            # Optional: Enable cron in dev (def
   - Simplifies deduplication logic (no URL extraction needed)
   - Adtraction now populates `programurl` directly from API
 - **Optimized caching strategy**:
-  - Pre-merged cache eliminates merge operations on most requests
-  - Three-tier fallback ensures reliability
+  - SQLite-based cache with O(log n) indexed lookups
+  - ACID guarantees and WAL mode for superior concurrency
+  - Stale-while-revalidate pattern for instant responses
+  - Request deduplication prevents redundant fetches
   - All caches use 48-hour TTL
-- **API rate limiting**: Cron job refreshes sources + merged cache daily
-- **Deduplication**: Merchants deduplicated by normalized URL during merge
+- **API rate limiting**: Cron job refreshes source caches daily
+- **Deduplication**: Merchants deduplicated by normalized URL during on-demand merge
 - **Performance optimizations**:
   - React hooks (useMemo, useCallback) prevent unnecessary re-renders
   - Debounced search reduces filtering operations
   - Component-level memoization (CategoryCard)
-  - Pre-merged cache reduces server CPU usage
+  - SQLite cache faster than JSON file parsing
 - **UI/UX**:
   - shadcn/ui components for consistent design
   - Loading states with Skeleton components
@@ -309,15 +313,17 @@ Update the cron expression in `cron-scheduler.server.ts` (currently 3:00 AM dail
   - `PARTNER_ADS_API_KEY`: Partner-ads.com API key
   - `ADTRACTION_API_TOKEN`: Adtraction API token
 - Cron jobs automatically enabled in production
-- **Cache Storage**: File-based cache stored in `./cache` directory
-  - **3 cache files**:
-    - `partnerads-data` - Partner-ads source data
-    - `adtraction-data` - Adtraction source data
-    - `merged-data` - Pre-merged data (performance optimization)
+- **Cache Storage**: SQLite database stored in `./cache` directory
+  - **Database file**: `./cache/cache.sqlite`
+  - **2 cache keys**:
+    - `CACHE_KEYS.PARTNERADS` - Partner-ads source data
+    - `CACHE_KEYS.ADTRACTION` - Adtraction source data
   - Cache persists across server restarts
-  - Ensure `./cache` directory has write permissions
+  - Ensure `./cache` directory has write permissions (for database + temp files)
+  - SQLite handles concurrent access via WAL mode (warmup + cron + requests)
   - For multi-instance deployments, consider shared filesystem or switch to Redis
-  - Pre-merged cache significantly reduces server CPU usage
+  - **Build Requirements**: Requires node-gyp and build tools for better-sqlite3 compilation
+  - **Debugging**: Use SQLite CLI to inspect cache: `sqlite3 ./cache/cache.sqlite "SELECT * FROM keyv"`
 - The `./cache` directory is excluded from git via `.gitignore`
 - **Resilience**: Application continues working if one affiliate network fails
 - Docker support included (see Dockerfile)
